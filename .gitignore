@@ -1,0 +1,27 @@
+# Dependencies
+node_modules/
+
+# Environment files (commit only the .env.example templates)
+.env
+.env.*
+!.env.example
+
+# Build output
+dist/
+build/
+*.tsbuildinfo
+
+# Prisma generated client (rebuilt by `npm run db:generate`)
+backend/src/generated/
+
+# Logs
+npm-debug.log*
+*.log
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+
+# E2E screenshots (regenerated on every run)
+e2e/screenshots/

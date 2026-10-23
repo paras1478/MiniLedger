@@ -1,0 +1,25 @@
+{
+  "name": "miniledger",
+  "version": "1.0.0",
+  "private": true,
+  "description": "MiniLedger: track money lent to friends. Monorepo with an Express API and an Expo mobile app.",
+  "workspaces": [
+    "backend",
+    "mobile"
+  ],
+  "engines": {
+    "node": ">=22.12"
+  },
+  "scripts": {
+    "dev:backend": "npm run dev --workspace backend",
+    "dev:mobile": "npm run start --workspace mobile",
+    "build:backend": "npm run build --workspace backend",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "db:generate": "npm run db:generate --workspace backend",
+    "db:migrate": "npm run db:migrate --workspace backend",
+    "db:deploy": "npm run db:deploy --workspace backend",
+    "db:status": "npm run db:status --workspace backend",
+    "db:check": "npm run db:check --workspace backend",
+    "db:studio": "npm run db:studio --workspace backend"
+  }
+}

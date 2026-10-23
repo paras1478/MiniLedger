@@ -1,0 +1,74 @@
+// MiniLedger database schema.
+// The connection URL comes from DATABASE_URL via prisma7.config.ts, not from this file.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum LoanStatus {
+  PENDING
+  REPAID
+}
+
+/// An app user who records the money they have lent to friends.
+model User {
+  id        String   @id @default(uuid()) @db.Uuid
+  /// E.164 format, e.g. +919876543210. One account per phone number.
+  phone     String   @unique @db.VarChar(20)
+  name      String?  @db.VarChar(100)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  loans Loan[]
+
+  @@map("users")
+}
+
+/// Money a user lent to a friend.
+model Loan {
+  id         String     @id @default(uuid()) @db.Uuid
+  /// Owner of the loan. Required: every loan belongs to exactly one user.
+  userId     String     @map("user_id") @db.Uuid
+  friendName String     @map("friend_name") @db.VarChar(100)
+  /// Exact decimal (never float) for currency: up to 9,999,999,999.99.
+  amount     Decimal    @db.Decimal(12, 2)
+  /// Calendar date only; no time-of-day or timezone.
+  dueDate    DateTime   @map("due_date") @db.Date
+  status     LoanStatus @default(PENDING)
+  createdAt  DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt  DateTime   @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// "My pending loans, soonest due first" and due-date reminders.
+  @@index([userId, status, dueDate])
+  /// "My loans, newest first" (default list view). Also covers FK lookups on user_id.
+  @@index([userId, createdAt(sort: Desc)])
+  @@map("loans")
+}
+
+/// A one-time login code sent to a phone number. Keyed by phone, not user, because the
+/// user may not exist until the code is verified. Only the newest code per phone is valid.
+model OtpCode {
+  id         String    @id @default(uuid()) @db.Uuid
+  phone      String    @db.VarChar(20)
+  /// HMAC-SHA256(OTP_SECRET, phone:code) as hex. The plain code is never stored.
+  codeHash   String    @map("code_hash") @db.Char(64)
+  expiresAt  DateTime  @map("expires_at") @db.Timestamptz(3)
+  /// Failed verification attempts against this code.
+  attempts   Int       @default(0)
+  /// Set when the code is successfully verified; a consumed code can never be reused.
+  consumedAt DateTime? @map("consumed_at") @db.Timestamptz(3)
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  /// Latest code for a phone (verify) and sends per phone in a time window (resend limits).
+  @@index([phone, createdAt(sort: Desc)])
+  /// Purging old rows.
+  @@index([createdAt])
+  @@map("otp_codes")
+}
