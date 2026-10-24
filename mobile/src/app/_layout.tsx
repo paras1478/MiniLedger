@@ -46,6 +46,7 @@ function RootNavigator() {
           <Stack.Screen name="(tabs)" />
           <Stack.Screen name="loans/new" options={{ presentation: 'modal' }} />
           <Stack.Screen name="loans/[id]" />
+          <Stack.Screen name="verify-phone" options={{ presentation: 'modal' }} />
         </Stack.Protected>
         <Stack.Protected guard={!signedIn}>
           <Stack.Screen name="login" />

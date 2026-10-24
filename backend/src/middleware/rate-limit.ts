@@ -25,3 +25,22 @@ function ipLimiter(windowMinutes: number, limit: number) {
 export function createAuthLimiters() {
   return { sendOtp: ipLimiter(15, 20), verifyOtp: ipLimiter(15, 50) };
 }
+
+/** Per signed-in user; mount after requireAuth. Complements the per-phone limits in the OTP service. */
+function userLimiter(windowMinutes: number, limit: number) {
+  return rateLimit({
+    windowMs: windowMinutes * 60 * 1000,
+    limit,
+    standardHeaders: 'draft-8',
+    legacyHeaders: false,
+    keyGenerator: (req) => `user:${req.user!.id}`,
+    handler: (_req, _res, next) => {
+      next(new AppError(429, 'RATE_LIMITED', 'Too many verification requests. Please try again later.'));
+    },
+  });
+}
+
+/** Created per app instance, like the auth limiters. */
+export function createPhoneVerificationLimiters() {
+  return { send: userLimiter(60, 10), check: userLimiter(15, 30) };
+}

@@ -25,12 +25,12 @@ function ddmmyyyy(offsetDays) {
   d.setDate(d.getDate() + offsetDays);
   return `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
 }
-function lastOtp() {
+function lastOtp(phone = PHONE) {
   const raw = readFileSync(API_LOG);
   // Windows PowerShell 5.1 redirection writes UTF-16LE (BOM FF FE); cmd and bash write UTF-8.
   const content = raw[0] === 0xff && raw[1] === 0xfe ? raw.toString('utf16le') : raw.toString('utf8');
-  const lines = content.split('\n').filter((l) => l.includes(`[OTP] ${PHONE} `));
-  return lines.at(-1)?.match(/-> (\d{6})/)?.[1];
+  const lines = content.split('\n').filter((l) => l.includes('[OTP] ') && l.includes(`(phone ${phone},`));
+  return lines.at(-1)?.match(/testing: (\d{6})/)?.[1];
 }
 
 const browser = await puppeteer.launch({
@@ -312,6 +312,41 @@ try {
   await check('Pull-to-refresh equivalent: reload keeps the session (token restored)', async () => {
     await page.reload({ waitUntil: 'domcontentloaded' });
     await waitText('Recent Loans', 60_000);
+  });
+
+  await check('Settings: verify a new number by OTP, then move back', async () => {
+    const { execSync } = await import('node:child_process');
+    // Waits for a code newer than `previous`, so a stale code from an earlier send is never used.
+    async function codeFor(phone, previous) {
+      for (let i = 0; i < 40; i++) {
+        const code = lastOtp(phone);
+        if (code && code !== previous) return code;
+        await new Promise((r) => setTimeout(r, 250));
+      }
+      throw new Error(`OTP for ${phone} not found in API log`);
+    }
+    async function verifyNumber(digits) {
+      const phone = `+91${digits}`;
+      const previous = lastOtp(phone);
+      await clickText('Verify or change number');
+      await waitText('Verify a phone number');
+      await fill('input[aria-label="Mobile number to verify"]', digits);
+      await clickText('Send OTP');
+      await waitText('Enter verification code');
+      await fill('input[placeholder="••••••"]', await codeFor(phone, previous)); // auto-submits
+      await waitText('Phone number updated.');
+      await waitVisibleText(phone.replace(/^\+91(\d{5})(\d{5})$/, '+91 $1 $2'));
+    }
+
+    await clickTab('Settings');
+    await waitVisibleText('Verified');
+    await verifyNumber('9990001299');
+    await shot('settings-new-number');
+    // Moving back needs a fresh code for the original number: skip its resend cooldown (test DB only).
+    execSync(
+      `psql "${TEST_DB}" -qc "UPDATE otp_codes SET created_at = created_at - interval '61 seconds' WHERE phone = '${PHONE}'"`
+    );
+    await verifyNumber(PHONE_DIGITS);
   });
 
   await check('Sign out returns to login and clears the session', async () => {

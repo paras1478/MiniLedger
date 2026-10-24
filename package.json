@@ -14,6 +14,7 @@
     "dev:backend": "npm run dev --workspace backend",
     "dev:mobile": "npm run start --workspace mobile",
     "build:backend": "npm run build --workspace backend",
+    "start:backend": "npm run start --workspace backend",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "db:generate": "npm run db:generate --workspace backend",
     "db:migrate": "npm run db:migrate --workspace backend",

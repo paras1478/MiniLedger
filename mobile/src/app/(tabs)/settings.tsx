@@ -1,17 +1,19 @@
 import Constants from 'expo-constants';
-import { Info, LogOut, Phone, Server, ShieldCheck, UserRound } from 'lucide-react-native';
+import { router } from 'expo-router';
+import { BadgeCheck, ChevronRight, Info, LogOut, Phone, Server, ShieldCheck, Smartphone, UserRound } from 'lucide-react-native';
 import type { LucideIcon } from 'lucide-react-native';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import type { ReactNode } from 'react';
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { AppButton } from '@/components/ui/app-button';
 import { API_URL } from '@/constants/config';
-import { Colors, FontSize, Radius, Shadow, Spacing } from '@/constants/theme';
+import { Colors, FontSize, Radius, Shadow, Spacing, TOUCH_TARGET } from '@/constants/theme';
 import { useAuth } from '@/context/auth-context';
 import { confirmAction } from '@/lib/dialogs';
 import { formatPhone } from '@/lib/format';
 
-function InfoRow({ icon: Icon, label, value }: { icon: LucideIcon; label: string; value: string }) {
+function InfoRow({ icon: Icon, label, value, accessory }: { icon: LucideIcon; label: string; value: string; accessory?: ReactNode }) {
   return (
     <View style={styles.row} accessible accessibilityLabel={`${label}: ${value}`}>
       <View style={styles.rowIcon}>
@@ -23,6 +25,7 @@ function InfoRow({ icon: Icon, label, value }: { icon: LucideIcon; label: string
           {value}
         </Text>
       </View>
+      {accessory}
     </View>
   );
 }
@@ -54,7 +57,35 @@ export default function SettingsScreen() {
 
         <Text style={styles.sectionLabel}>Account</Text>
         <View style={styles.card}>
-          <InfoRow icon={Phone} label="Phone number" value={user ? formatPhone(user.phone) : '-'} />
+          <InfoRow
+            icon={Phone}
+            label="Phone number"
+            value={user ? formatPhone(user.phone) : '-'}
+            accessory={
+              user?.phoneVerifiedAt ? (
+                <View style={styles.verified} accessibilityLabel="Verified">
+                  <BadgeCheck size={14} color={Colors.successText} />
+                  <Text style={styles.verifiedText}>Verified</Text>
+                </View>
+              ) : (
+                <View style={styles.unverified}>
+                  <Text style={styles.unverifiedText}>Not verified</Text>
+                </View>
+              )
+            }
+          />
+          <View style={styles.divider} />
+          <Pressable
+            onPress={() => router.push('/verify-phone')}
+            accessibilityRole="button"
+            accessibilityLabel="Verify or change phone number"
+            style={({ pressed }) => [styles.row, styles.actionRow, pressed && styles.actionRowPressed]}>
+            <View style={styles.rowIcon}>
+              <Smartphone size={18} color={Colors.primary} />
+            </View>
+            <Text style={[styles.rowText, styles.actionText]}>Verify or change number</Text>
+            <ChevronRight size={18} color={Colors.textMuted} />
+          </Pressable>
           <View style={styles.divider} />
           <InfoRow icon={ShieldCheck} label="Sign-in method" value="One-time code (OTP)" />
         </View>
@@ -125,6 +156,21 @@ const styles = StyleSheet.create({
   rowText: { flex: 1 },
   rowLabel: { fontSize: FontSize.caption, color: Colors.textMuted },
   rowValue: { fontSize: FontSize.body, fontWeight: '600', color: Colors.text },
+  verified: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: Spacing.sm,
+    paddingVertical: 3,
+    borderRadius: Radius.pill,
+    backgroundColor: Colors.successSoft,
+  },
+  verifiedText: { fontSize: FontSize.caption, fontWeight: '700', color: Colors.successText },
+  unverified: { paddingHorizontal: Spacing.sm, paddingVertical: 3, borderRadius: Radius.pill, backgroundColor: Colors.warningSoft },
+  unverifiedText: { fontSize: FontSize.caption, fontWeight: '700', color: Colors.warningText },
+  actionRow: { minHeight: TOUCH_TARGET + 16 },
+  actionRowPressed: { backgroundColor: Colors.background },
+  actionText: { fontSize: FontSize.body, fontWeight: '600', color: Colors.text },
   divider: { height: StyleSheet.hairlineWidth, backgroundColor: Colors.border, marginLeft: 64 },
   signOut: { marginTop: Spacing.xl },
 });

@@ -6,8 +6,9 @@
   "type": "module",
   "main": "dist/index.js",
   "scripts": {
-    "dev": "tsx watch src/index.ts",
+    "dev": "tsx watch --include .env src/index.ts",
     "build": "tsc -p tsconfig.json",
+    "prestart": "npm run build",
     "start": "node dist/index.js",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tests/tsconfig.json",
     "db:generate": "prisma generate",
@@ -16,6 +17,7 @@
     "db:status": "prisma migrate status",
     "db:check": "tsx src/scripts/check-db.ts",
     "db:studio": "prisma studio",
+    "twilio:check": "tsx src/scripts/twilio-check.ts",
     "pretest": "tsx tests/prepare-db.ts",
     "test": "node --import tsx --test --test-concurrency=1 \"tests/**/*.test.ts\""
   },
@@ -29,6 +31,7 @@
     "helmet": "^8.3.0",
     "jose": "^6.2.13",
     "pg": "^8.23.1",
+    "twilio": "^6.2.0",
     "zod": "^4.6.7"
   },
   "devDependencies": {

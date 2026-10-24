@@ -3,7 +3,10 @@
 A mobile app for tracking money you lend to friends: who owes you, how much, when it is due,
 and what has been paid back. Built for a Full Stack Development internship assignment.
 
-- **Phone-number login** with a one-time code (mock SMS: the code is printed in the API log).
+- **Phone-number login** with a one-time code sent by SMS through **Twilio Verify** (in development
+  without Twilio credentials, the code is printed in the API log instead).
+- **Verified phone numbers**: Settings shows the verification state; a signed-in user can re-verify
+  their number or move the account to a new one with an SMS code.
 - **Loans**: add (with a calendar date picker), list (search by name, sort by recent or due date,
   filter by Pending / Repaid / Overdue), view details, mark as repaid.
 - **Dashboard**: Total Lent, Total Repaid, Outstanding, Overdue Amount, Active Loans, recent loans,
@@ -127,6 +130,67 @@ node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"
 
 `EXPO_PUBLIC_*` values are compiled into the app and are visible to anyone; never put secrets there.
 
+### Twilio Verify (SMS codes)
+
+Codes are generated, sent and checked by [Twilio Verify](https://www.twilio.com/docs/verify); the API
+never sees or stores them. Set these in `backend/.env` (server only, never in `mobile/.env`):
+
+| Variable | Description |
+| --- | --- |
+| `TWILIO_ACCOUNT_SID` | Twilio Console → Account info (starts with `AC`) |
+| `TWILIO_AUTH_TOKEN` | Twilio Console → Account info. Or instead: |
+| `TWILIO_API_KEY` + `TWILIO_API_SECRET` | Console → Account → API keys (`SK…`); used when both are set (recommended) |
+| `TWILIO_VERIFY_SERVICE_SID` | Console → Verify → Services → your service (starts with `VA`) |
+| `OTP_PROVIDER` | Optional. `console` or `twilio`. Empty: `console` in development, `twilio` in production |
+| `OTP_RESEND_COOLDOWN_SECONDS` | Seconds between two codes to one number (default 60) |
+| `OTP_MAX_SENDS_PER_HOUR` | Codes per number per hour (default 5) |
+
+`TWILIO_PHONE_NUMBER` is **not** needed: Verify sends from Twilio's own senders.
+
+On start the API logs which delivery it uses, e.g. `One-time codes: Twilio Verify (service …1a2b),
+authenticated with API key`. **If it says `console mode, NO SMS is sent`, no SMS will arrive**: the
+code is only printed in that terminal. `npm run dev:backend` restarts when `backend/.env` changes.
+
+Check the whole Twilio setup without sending anything:
+
+```powershell
+npm run twilio:check --workspace backend                          # account, balance, Verify services, caller IDs
+npm run twilio:check --workspace backend -- --phone +919876543210 # + recent Verify attempts / SMS status for a number
+npm run twilio:check --workspace backend -- --send +919876543210  # manual test: sends ONE real code
+```
+
+Every send is logged as `[twilio] verify send VE… to +91********10: accepted (status=pending)`.
+"Accepted" means Twilio took the request, **not** that the SMS was delivered; look the `VE…` SID up
+in Console → Verify → Logs, or use `--phone` above, to see the delivery state.
+
+- **console**: development only. Codes are printed as `[OTP] OTP generated for testing: 123456  (phone +91…)` and the app shows a
+  "development server" hint. It is refused when `NODE_ENV=production`.
+- **Not configured** (production without Twilio, or a malformed SID): only sending codes fails, with
+  `503 OTP_PROVIDER_NOT_CONFIGURED`. The log names the missing variable; the rest of the API works.
+
+**One-time Twilio setup**
+
+1. Console → **Verify → Services → Create new**. Name it "MiniLedger" (the name appears in the SMS),
+   keep **Code length 6**, enable the **SMS** channel. Copy the Service SID (`VA…`).
+2. Console → **Verify → Settings → Geo permissions**: allow only the countries you serve (e.g. India).
+   SMS to disabled countries fails with `PHONE_NOT_SUPPORTED`. Keep **Fraud Guard** on.
+3. **Trial accounts** can only text numbers listed under **Phone Numbers → Verified Caller IDs**, and
+   messages carry a trial prefix. Other numbers get `PHONE_NOT_SUPPORTED` (the API log says why).
+   Upgrade the account (add billing) before real users sign up; each Verify attempt is billed.
+4. Country rules: some countries regulate OTP SMS (India, for example, requires DLT registration
+   for application-to-person SMS). Check Twilio's SMS guidelines for each country you enable,
+   especially before using a custom sender ID or message template.
+5. Codes stay valid in Twilio for 10 minutes by default; MiniLedger additionally accepts a code only
+   within **5 minutes** and **5 attempts**, and Twilio caps sends per number on its side as well.
+
+**Production hosting**: there is no deployment config in this repo. Set `TWILIO_ACCOUNT_SID`,
+`TWILIO_AUTH_TOKEN`, `TWILIO_VERIFY_SERVICE_SID` (plus `DATABASE_URL`, `JWT_SECRET`, `OTP_SECRET`,
+`NODE_ENV=production`, `CORS_ORIGIN`) as environment variables / secrets in your host's dashboard
+(e.g. Render → Environment, Railway → Variables, Azure App Service → Configuration). Never commit
+them. Build with `npm run build --workspace backend` (or let `npm start` do it), run migrations
+with `npm run db:deploy`, start with `npm run start:backend`. Behind a reverse proxy, enable
+`app.set('trust proxy', 1)` so the per-IP limits see the client address.
+
 ### 4. Database migrations
 
 ```powershell
@@ -154,10 +218,18 @@ npm run dev:mobile    # Expo dev server
 Then in the Expo terminal: press **`a`** for an Android emulator, **`w`** for the web browser,
 or scan the QR code with **Expo Go** on your phone.
 
-### Mock OTP login
+Production-style run of the API (compiles to `backend/dist` first, then starts it):
+
+```powershell
+npm run start:backend
+```
+
+### OTP login
 
 1. Enter any 10-digit mobile number (the app adds `+91`; type `+` first for another country code).
-2. The API terminal prints: `[OTP] +919876543210 -> 482913 (valid for 5 minutes)`.
+2. In development the API terminal prints
+   `[OTP] OTP generated for testing: 482913  (phone +919876543210, valid 5 min; …)`.
+   With `OTP_PROVIDER=twilio` (and always in production) the code is sent by SMS instead.
 3. Enter that code. New numbers create an account automatically.
 
 Rules: codes expire after **5 minutes**, allow **5 attempts**, are **single-use**, and a new code
@@ -174,11 +246,36 @@ Authenticated routes need `Authorization: Bearer <token>`.
 | `POST /auth/send-otp` | – | `{ phone }` | `{ message, phone, expiresInSeconds, resendAvailableInSeconds }` |
 | `POST /auth/verify-otp` | – | `{ phone, code }` | `{ token, tokenType, expiresAt, isNewUser, user }` |
 | `GET /auth/me` | ✓ | – | `{ user }` |
+| `GET /phone-verification/status` | ✓ | – | `{ phone, verified, verifiedAt, pending, available }` |
+| `POST /phone-verification/send` | ✓ | `{ phone }` | same as `send-otp` |
+| `POST /phone-verification/check` | ✓ | `{ phone, code }` | `{ message, user }` (409 `PHONE_IN_USE`) |
 | `POST /loans` | ✓ | `{ friendName, amount: "1500.50", dueDate: "YYYY-MM-DD" }` | `201 { loan }` |
 | `GET /loans` | ✓ | `?status=PENDING\|REPAID\|OVERDUE&q=<name>&sort=recent\|dueDate&limit=20&cursor=<id>` | `{ loans, nextCursor, asOf }` |
 | `GET /loans/:id` | ✓ | – | `{ loan }` (404 if not yours) |
 | `PATCH /loans/:id/repay` | ✓ | – | `{ loan }` (409 if already repaid) |
 | `GET /dashboard/summary` | ✓ | – | `{ summary }` |
+
+`send-otp` and `phone-verification/send` also return `delivery`: `"sms"` (Twilio) or `"log"` (development).
+A **user** is `{ id, phone, name, phoneVerifiedAt, createdAt }`.
+
+**Phone verification** lets the signed-in user prove a number and make it their account's number
+(or re-verify the current one). Codes are bound to the requesting user and to their purpose, so a
+login code cannot change a number and one user cannot redeem another user's code. Whether a number
+already belongs to another account is only revealed (409) after its code is entered, so the API
+cannot be used to look up who has an account. Limits: the per-number cooldown and hourly cap
+(shared with login), plus 10 sends per hour and 30 checks per 15 minutes per user.
+
+Example (PowerShell, with `$h` from the example below):
+
+```powershell
+Invoke-RestMethod -Method Post "$api/phone-verification/send" -Headers $h -ContentType "application/json" -Body '{"phone":"+919812345678"}'
+Invoke-RestMethod -Method Post "$api/phone-verification/check" -Headers $h -ContentType "application/json" -Body '{"phone":"+919812345678","code":"<code from SMS>"}'
+```
+
+Twilio failures map to: `PHONE_INVALID` (400), `PHONE_NOT_SUPPORTED` (400: country blocked, trial
+recipient), `OTP_SEND_LIMIT_REACHED` / `SMS_PROVIDER_BUSY` (429), `SMS_PROVIDER_ERROR` (503: wrong
+credentials or service SID) and `SMS_PROVIDER_UNAVAILABLE` (503: network or Twilio outage).
+Only Twilio error codes are logged, never codes, tokens or Twilio's messages (which can contain numbers).
 
 A **loan** is `{ id, friendName, amount, dueDate, status, isOverdue, daysOverdue, createdAt, updatedAt }`.
 Amounts are decimal strings with 2 places (stored as `DECIMAL(12,2)`, never floats).
@@ -212,7 +309,7 @@ Invoke-RestMethod "$api/dashboard/summary" -Headers $h
 
 ```powershell
 npm run typecheck                    # TypeScript: backend (src + tests) and mobile
-npm test --workspace backend         # 22 API tests against TEST_DATABASE_URL (auto-created + migrated)
+npm test --workspace backend         # 36 API tests against TEST_DATABASE_URL (auto-created + migrated)
 npm run lint --workspace mobile      # ESLint (Expo config)
 cd mobile; npx expo-doctor           # Expo dependency/config diagnostics
 ```
@@ -274,7 +371,10 @@ Screenshots are written to `e2e/screenshots/`.
 
 ## Known limitations
 
-- **No real SMS**: OTPs are printed in the API log (mock OTP, as specified).
+- **Live SMS delivery has not been tested** in this environment: the automated tests use a fake
+  Twilio client, and no Verify Service SID was configured. Run one manual login with real
+  credentials (see Twilio setup above) before relying on it.
+- Without Twilio credentials, development OTPs are printed in the API log.
 - **Not tested on an Android device/emulator in this environment** (no Android SDK installed).
   Android was verified by building the Android bundle (`npx expo export --platform android`)
   and `expo-doctor`; the full UI journey was verified on the Expo **web** build.
@@ -299,5 +399,3 @@ git branch -M main
 git remote add origin <YOUR_REPOSITORY_URL>
 git push -u origin main
 ```
-#   M i n i L e d g e r  
- 

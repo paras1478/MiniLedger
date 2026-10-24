@@ -1,6 +1,13 @@
 import 'dotenv/config';
 import { z } from 'zod';
 
+/** Unset and empty (`KEY=`) both mean "not configured". */
+const optionalString = z
+  .string()
+  .trim()
+  .optional()
+  .transform((value) => value || undefined);
+
 const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   PORT: z.coerce.number().int().positive().default(4100),
@@ -28,6 +35,24 @@ const envSchema = z.object({
         return false;
       }
     }, 'APP_TIMEZONE must be a valid IANA timezone, e.g. Asia/Kolkata'),
+
+  /**
+   * Who generates and delivers one-time codes. "twilio": Twilio Verify sends and checks them.
+   * "console": codes are printed to the server log (development only; refused in production).
+   * Unset: Twilio when all TWILIO_* values below are present, otherwise console outside production.
+   */
+  OTP_PROVIDER: z.enum(['twilio', 'console']).optional(),
+  /** Twilio credentials (server-side only). Missing values disable SMS codes, not the whole API. */
+  TWILIO_ACCOUNT_SID: optionalString,
+  TWILIO_AUTH_TOKEN: optionalString,
+  /** Alternative to the Auth Token (recommended): an API key (SK…) and its secret. */
+  TWILIO_API_KEY: optionalString,
+  TWILIO_API_SECRET: optionalString,
+  TWILIO_VERIFY_SERVICE_SID: optionalString,
+  /** Minimum gap between two codes for the same phone number. */
+  OTP_RESEND_COOLDOWN_SECONDS: z.coerce.number().int().min(10).max(3600).default(60),
+  /** Codes per phone number per hour, across login and phone changes. */
+  OTP_MAX_SENDS_PER_HOUR: z.coerce.number().int().min(1).max(50).default(5),
 });
 
 const parsed = envSchema.safeParse(process.env);

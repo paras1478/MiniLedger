@@ -6,6 +6,8 @@ import type {
   LoanSort,
   LoanResponse,
   MeResponse,
+  PhoneVerificationCheckResponse,
+  PhoneVerificationStatus,
   SendOtpResponse,
   VerifyOtpResponse,
 } from '@/api/types';
@@ -48,6 +50,16 @@ export const getLoan = (request: AuthRequest, loanId: string, signal?: AbortSign
 
 export const createLoan = (request: AuthRequest, input: CreateLoanInput) =>
   request<LoanResponse>('/loans', { method: 'POST', body: input });
+
+// Verifying or changing the signed-in user's phone number
+export const getPhoneVerificationStatus = (request: AuthRequest, signal?: AbortSignal) =>
+  request<PhoneVerificationStatus>('/phone-verification/status', { signal });
+
+export const sendPhoneVerification = (request: AuthRequest, phone: string) =>
+  request<SendOtpResponse>('/phone-verification/send', { method: 'POST', body: { phone } });
+
+export const checkPhoneVerification = (request: AuthRequest, phone: string, code: string) =>
+  request<PhoneVerificationCheckResponse>('/phone-verification/check', { method: 'POST', body: { phone, code } });
 
 export const repayLoan = (request: AuthRequest, loanId: string) =>
   request<LoanResponse>(`/loans/${encodeURIComponent(loanId)}/repay`, { method: 'PATCH' });

@@ -1,7 +1,7 @@
 import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 
-import { createApp } from '../src/app.js';
+import { createApp, type AppOptions } from '../src/app.js';
 import { prisma } from '../src/lib/prisma.js';
 
 export { prisma };
@@ -11,7 +11,7 @@ export async function resetDatabase() {
   await prisma.$executeRawUnsafe('TRUNCATE TABLE loans, users, otp_codes RESTART IDENTITY CASCADE');
 }
 
-/** Captures `[OTP] <phone> -> <code>` lines that the server prints, without echoing them. */
+/** Captures `[OTP] OTP generated for testing: <code>  (phone <phone>, …)` lines, without echoing them. */
 export function captureOtps() {
   const lines: string[] = [];
   const original = console.info;
@@ -20,8 +20,8 @@ export function captureOtps() {
   };
   return {
     lastCode(phone: string): string {
-      const line = lines.filter((l) => l.startsWith(`[OTP] ${phone} `)).at(-1);
-      const code = line?.match(/-> (\d{6})/)?.[1];
+      const line = lines.filter((l) => l.startsWith('[OTP] ') && l.includes(`(phone ${phone},`)).at(-1);
+      const code = line?.match(/testing: (\d{6})/)?.[1];
       if (!code) throw new Error(`No OTP logged for ${phone}`);
       return code;
     },
@@ -38,8 +38,8 @@ export interface ApiResponse {
   body: any;
 }
 
-export async function startServer() {
-  const server: Server = createApp().listen(0);
+export async function startServer(options?: AppOptions) {
+  const server: Server = createApp(options).listen(0);
   await new Promise((resolve) => server.once('listening', resolve));
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/v1`;
 

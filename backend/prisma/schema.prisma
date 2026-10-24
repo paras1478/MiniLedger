@@ -15,16 +15,27 @@ enum LoanStatus {
   REPAID
 }
 
+/// What a one-time code was sent for. A code can only be redeemed for its own purpose.
+enum OtpPurpose {
+  /// Public login / sign-up with a phone number.
+  LOGIN
+  /// A signed-in user verifying a (new) phone number for their own account.
+  PHONE_CHANGE
+}
+
 /// An app user who records the money they have lent to friends.
 model User {
-  id        String   @id @default(uuid()) @db.Uuid
+  id              String    @id @default(uuid()) @db.Uuid
   /// E.164 format, e.g. +919876543210. One account per phone number.
-  phone     String   @unique @db.VarChar(20)
-  name      String?  @db.VarChar(100)
-  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+  phone           String    @unique @db.VarChar(20)
+  name            String?   @db.VarChar(100)
+  /// When `phone` was last proven by a one-time code. Set at sign-up and on a verified number change.
+  phoneVerifiedAt DateTime? @map("phone_verified_at") @db.Timestamptz(3)
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  loans Loan[]
+  loans    Loan[]
+  otpCodes OtpCode[]
 
   @@map("users")
 }
@@ -52,23 +63,34 @@ model Loan {
   @@map("loans")
 }
 
-/// A one-time login code sent to a phone number. Keyed by phone, not user, because the
-/// user may not exist until the code is verified. Only the newest code per phone is valid.
+/// A one-time code sent to a phone number. Keyed by phone, not user, because a login code's
+/// user may not exist until the code is verified. Only the newest code per phone and purpose is
+/// valid. Rows also drive the per-phone resend cooldown and hourly cap for every provider.
 model OtpCode {
-  id         String    @id @default(uuid()) @db.Uuid
-  phone      String    @db.VarChar(20)
-  /// HMAC-SHA256(OTP_SECRET, phone:code) as hex. The plain code is never stored.
-  codeHash   String    @map("code_hash") @db.Char(64)
-  expiresAt  DateTime  @map("expires_at") @db.Timestamptz(3)
+  id          String     @id @default(uuid()) @db.Uuid
+  phone       String     @db.VarChar(20)
+  purpose     OtpPurpose @default(LOGIN)
+  /// The signed-in user who requested a PHONE_CHANGE code; null for LOGIN codes.
+  userId      String?    @map("user_id") @db.Uuid
+  /// HMAC-SHA256(OTP_SECRET, phone:code) as hex for locally generated codes (development).
+  /// Null when Twilio Verify generated and checks the code: then no code is stored at all.
+  codeHash    String?    @map("code_hash") @db.Char(64)
+  /// Twilio Verification SID (VE…) when Twilio sent the code, for lookups in the Twilio Console.
+  providerSid String?    @map("provider_sid") @db.VarChar(34)
+  expiresAt   DateTime   @map("expires_at") @db.Timestamptz(3)
   /// Failed verification attempts against this code.
-  attempts   Int       @default(0)
+  attempts    Int        @default(0)
   /// Set when the code is successfully verified; a consumed code can never be reused.
-  consumedAt DateTime? @map("consumed_at") @db.Timestamptz(3)
-  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  consumedAt  DateTime?  @map("consumed_at") @db.Timestamptz(3)
+  createdAt   DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  user User? @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   /// Latest code for a phone (verify) and sends per phone in a time window (resend limits).
   @@index([phone, createdAt(sort: Desc)])
   /// Purging old rows.
   @@index([createdAt])
+  /// A user's pending phone-change code (status endpoint).
+  @@index([userId, createdAt(sort: Desc)])
   @@map("otp_codes")
 }

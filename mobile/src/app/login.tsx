@@ -1,5 +1,5 @@
 import { ArrowLeft, CircleAlert, Lock, MessageSquareText, ShieldCheck, Wallet } from 'lucide-react-native';
-import { useEffect, useRef, useState, type ComponentRef } from 'react';
+import { useRef, useState, type ComponentRef } from 'react';
 import {
   KeyboardAvoidingView,
   Platform,
@@ -13,35 +13,17 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { sendOtp, verifyOtp } from '@/api/endpoints';
+import { DevDeliveryNotice } from '@/components/auth/delivery-notice';
 import { OtpInput } from '@/components/auth/otp-input';
+import { PhoneInput } from '@/components/auth/phone-input';
 import { AppButton } from '@/components/ui/app-button';
 import { Colors, FontSize, Radius, Shadow, Spacing, TOUCH_TARGET } from '@/constants/theme';
 import { useAuth } from '@/context/auth-context';
-import { ApiError } from '@/lib/api-client';
+import { useCountdown } from '@/hooks/use-countdown';
 import { formatPhone } from '@/lib/format';
+import { formatCountdown, otpErrorMessage, phoneInputError, retryAfterSeconds, toE164 } from '@/lib/phone';
 
 const CODE_LENGTH = 6;
-
-/** 75 -> "1:15", 42 -> "42s". */
-function formatCountdown(seconds: number): string {
-  return seconds >= 60 ? `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}` : `${seconds}s`;
-}
-
-/** "98765 43210" -> "+919876543210"; numbers typed with "+" are used as-is. */
-function toE164(input: string): string {
-  const trimmed = input.trim();
-  return trimmed.startsWith('+') ? `+${trimmed.replace(/\D/g, '')}` : `+91${trimmed.replace(/\D/g, '')}`;
-}
-
-function errorMessage(error: unknown): string {
-  if (!(error instanceof ApiError)) return 'Something went wrong. Please try again.';
-  if (error.code === 'VALIDATION_ERROR') return Object.values(error.fieldErrors)[0] ?? error.message;
-  if (error.code === 'OTP_INVALID') {
-    const left = Number(error.details?.attemptsRemaining ?? 0);
-    return `That code is incorrect. ${left} ${left === 1 ? 'attempt' : 'attempts'} left.`;
-  }
-  return error.message;
-}
 
 export default function LoginScreen() {
   const { signIn, notice } = useAuth();
@@ -51,14 +33,10 @@ export default function LoginScreen() {
   const [code, setCode] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [resendIn, setResendIn] = useState(0);
+  const [resendIn, setResendIn] = useCountdown();
+  /** "log": development server without SMS; the code is in the API terminal. */
+  const [delivery, setDelivery] = useState<'sms' | 'log'>('sms');
   const codeInput = useRef<ComponentRef<typeof TextInput>>(null);
-
-  useEffect(() => {
-    if (resendIn <= 0) return;
-    const timer = setTimeout(() => setResendIn((s) => s - 1), 1000);
-    return () => clearTimeout(timer);
-  }, [resendIn]);
 
   const requestCode = async (target: string) => {
     setBusy(true);
@@ -66,13 +44,14 @@ export default function LoginScreen() {
     try {
       const result = await sendOtp(target);
       setPhone(result.phone);
+      setDelivery(result.delivery);
       setCode('');
       setStep('code');
       setResendIn(result.resendAvailableInSeconds);
       setTimeout(() => codeInput.current?.focus(), 250);
     } catch (caught) {
-      setError(errorMessage(caught));
-      const retry = caught instanceof ApiError ? Number(caught.details?.retryAfterSeconds ?? 0) : 0;
+      setError(otpErrorMessage(caught));
+      const retry = retryAfterSeconds(caught);
       if (retry > 0) setResendIn(retry);
     } finally {
       setBusy(false);
@@ -80,12 +59,12 @@ export default function LoginScreen() {
   };
 
   const submitPhone = () => {
-    const target = toE164(phoneInput);
-    if (!phoneInput.trim().startsWith('+') && target.length !== 13) {
-      setError('Enter your 10-digit mobile number.');
+    const invalid = phoneInputError(phoneInput);
+    if (invalid) {
+      setError(invalid);
       return;
     }
-    void requestCode(target);
+    void requestCode(toE164(phoneInput));
   };
 
   const submitCode = async (value = code) => {
@@ -96,7 +75,7 @@ export default function LoginScreen() {
       const { token, user } = await verifyOtp(phone, value);
       await signIn(token, user); // the navigator switches to the app
     } catch (caught) {
-      setError(errorMessage(caught));
+      setError(otpErrorMessage(caught));
       setCode('');
       setBusy(false);
     }
@@ -155,32 +134,25 @@ export default function LoginScreen() {
                 <Text style={styles.label} nativeID="phoneLabel">
                   Mobile number
                 </Text>
-                <View style={[styles.inputRow, error && styles.inputError]}>
-                  {!phoneInput.startsWith('+') && <Text style={styles.prefix}>+91</Text>}
-                  <TextInput
-                    value={phoneInput}
-                    onChangeText={(text) => {
-                      setPhoneInput(text);
-                      setError(null);
-                    }}
-                    placeholder="98765 43210"
-                    placeholderTextColor={Colors.placeholder}
-                    keyboardType="phone-pad"
-                    autoComplete="tel"
-                    textContentType="telephoneNumber"
-                    returnKeyType="send"
-                    onSubmitEditing={submitPhone}
-                    maxLength={16}
-                    accessibilityLabelledBy="phoneLabel"
-                    accessibilityLabel="Mobile number"
-                    style={styles.input}
-                  />
-                </View>
+                <PhoneInput
+                  value={phoneInput}
+                  onChangeText={(text) => {
+                    setPhoneInput(text);
+                    setError(null);
+                  }}
+                  onSubmitEditing={submitPhone}
+                  hasError={!!error}
+                  labelledBy="phoneLabel"
+                />
               </>
             ) : (
               <>
                 <Text style={styles.title}>Enter verification code</Text>
-                <Text style={styles.subtitle}>Sent to {formatPhone(phone)}</Text>
+                <Text style={styles.subtitle}>
+                  {delivery === 'sms'
+                    ? `Sent by SMS to ${formatPhone(phone)}. It can take up to a minute.`
+                    : `For ${formatPhone(phone)}`}
+                </Text>
                 <View style={styles.codeWrap}>
                   <OtpInput
                     ref={codeInput}
@@ -191,11 +163,7 @@ export default function LoginScreen() {
                     editable={!busy}
                   />
                 </View>
-                {__DEV__ && (
-                  <Text style={styles.devHint}>
-                    Development: no SMS is sent. The code is printed in the backend terminal.
-                  </Text>
-                )}
+                {delivery === 'log' && <DevDeliveryNotice />}
               </>
             )}
 
@@ -297,22 +265,7 @@ const styles = StyleSheet.create({
   title: { fontSize: FontSize.title + 2, fontWeight: '700', color: Colors.text },
   subtitle: { fontSize: FontSize.body, color: Colors.textMuted, marginTop: -Spacing.xs },
   label: { fontSize: FontSize.small, fontWeight: '600', color: Colors.text, marginTop: Spacing.sm },
-  inputRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    minHeight: TOUCH_TARGET + 8,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    borderRadius: Radius.md,
-    backgroundColor: Colors.background,
-    paddingHorizontal: Spacing.lg,
-    gap: Spacing.sm,
-  },
-  prefix: { fontSize: FontSize.bodyLarge, fontWeight: '600', color: Colors.text },
-  input: { flex: 1, minWidth: 0, fontSize: FontSize.bodyLarge, color: Colors.text, paddingVertical: Spacing.md },
-  inputError: { borderColor: Colors.danger },
   codeWrap: { marginTop: Spacing.sm },
-  devHint: { fontSize: FontSize.caption, color: Colors.textMuted, textAlign: 'center' },
   error: { fontSize: FontSize.small, color: Colors.dangerText, fontWeight: '500' },
   resend: { minHeight: TOUCH_TARGET, alignItems: 'center', justifyContent: 'center' },
   resendText: { fontSize: FontSize.body, fontWeight: '600', color: Colors.brandText },

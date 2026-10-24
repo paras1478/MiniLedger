@@ -6,6 +6,8 @@ export interface User {
   id: string;
   phone: string;
   name: string | null;
+  /** When the phone number was last proven with a one-time code (null if never). */
+  phoneVerifiedAt: string | null;
   createdAt: string;
 }
 
@@ -61,6 +63,23 @@ export interface SendOtpResponse {
   phone: string;
   expiresInSeconds: number;
   resendAvailableInSeconds: number;
+  /** "sms": sent by text message (Twilio Verify). "log": development server, printed in its log. */
+  delivery: 'sms' | 'log';
+}
+
+export interface PhoneVerificationStatus {
+  phone: string;
+  verified: boolean;
+  verifiedAt: string | null;
+  /** A phone-change code that was sent and can still be entered. */
+  pending: { phone: string; expiresAt: string; resendAvailableInSeconds: number } | null;
+  /** False when the server cannot send codes (SMS not configured). */
+  available: boolean;
+}
+
+export interface PhoneVerificationCheckResponse {
+  message: string;
+  user: User;
 }
 
 export interface VerifyOtpResponse {

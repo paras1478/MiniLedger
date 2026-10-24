@@ -1,14 +1,18 @@
 import { createApp } from './app.js';
 import { env } from './config/env.js';
+import { resolveOtpProvider } from './lib/otp-provider.js';
 import { prisma } from './lib/prisma.js';
 
-const app = createApp();
+const otpProvider = resolveOtpProvider();
+const app = createApp({ otpProvider });
 
 // No host argument: Node binds all IPv4 and IPv6 interfaces (so a phone on the same Wi-Fi can
 // reach the API), and a port already used by another app fails with EADDRINUSE instead of
 // silently sharing it on one address family.
 const server = app.listen(env.PORT, () => {
   console.log(`MiniLedger API listening on http://localhost:${env.PORT}`);
+  const log = otpProvider.kind === 'twilio-verify' ? console.log : console.warn;
+  log(`One-time codes: ${otpProvider.label}`);
 });
 
 server.on('error', (error: NodeJS.ErrnoException) => {

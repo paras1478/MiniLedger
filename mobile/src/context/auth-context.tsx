@@ -23,6 +23,8 @@ interface AuthContextValue {
   notice: string | null;
   signIn: (token: string, user: User) => Promise<void>;
   signOut: (notice?: string) => Promise<void>;
+  /** Replaces the signed-in user (e.g. after verifying a new phone number) and saves it. */
+  updateUser: (user: User) => Promise<void>;
   /** Calls the API with the current token. Any 401 signs the user out. */
   authRequest: AuthRequest;
 }
@@ -52,6 +54,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(nextUser);
     setNotice(null);
     setStatus('signedIn');
+  }, []);
+
+  const updateUser = useCallback(async (nextUser: User) => {
+    setUser(nextUser);
+    if (tokenRef.current) await saveSession(tokenRef.current, nextUser);
   }, []);
 
   // Restore the saved session, then confirm it with the server in the background.
@@ -96,8 +103,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 
   const value = useMemo(
-    () => ({ status, user, notice, signIn, signOut, authRequest }),
-    [status, user, notice, signIn, signOut, authRequest]
+    () => ({ status, user, notice, signIn, signOut, updateUser, authRequest }),
+    [status, user, notice, signIn, signOut, updateUser, authRequest]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

@@ -45,14 +45,17 @@ describe('phone OTP authentication', () => {
     assert.equal(res.status, 200);
     assert.equal(res.body.phone, PHONE, 'phone is normalized to E.164');
     assert.equal(res.body.expiresInSeconds, 300);
+    // Without Twilio the API must not claim an SMS was sent.
+    assert.equal(res.body.delivery, 'log');
+    assert.match(res.body.message, /no SMS was sent/);
 
     const code = otps.lastCode(PHONE);
     assert.match(code, /^\d{6}$/);
     assert.ok(!JSON.stringify(res.body).includes(code), 'OTP must not appear in the response');
 
     const row = await prisma.otpCode.findFirstOrThrow({ where: { phone: PHONE } });
-    assert.equal(row.codeHash.length, 64);
-    assert.ok(!row.codeHash.includes(code));
+    assert.equal(row.codeHash?.length, 64);
+    assert.ok(!row.codeHash?.includes(code));
     assert.equal(row.expiresAt.getTime() - row.createdAt.getTime(), 5 * 60 * 1000);
   });
 
