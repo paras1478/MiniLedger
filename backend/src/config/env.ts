@@ -49,6 +49,8 @@ const envSchema = z.object({
   TWILIO_API_KEY: optionalString,
   TWILIO_API_SECRET: optionalString,
   TWILIO_VERIFY_SERVICE_SID: optionalString,
+  /** SMS-capable Twilio number (E.164). Used to text codes when no Verify service is configured. */
+  TWILIO_PHONE_NUMBER: optionalString,
   /** Minimum gap between two codes for the same phone number. */
   OTP_RESEND_COOLDOWN_SECONDS: z.coerce.number().int().min(10).max(3600).default(60),
   /** Codes per phone number per hour, across login and phone changes. */

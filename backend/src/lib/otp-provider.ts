@@ -20,12 +20,15 @@ export interface OtpSendReceipt {
 /**
  * How one-time codes are generated and delivered.
  * - `local`: the API generates the code, stores only its HMAC and prints it to the log (development).
+ * - `twilio-sms`: the API generates the code (HMAC stored, as above) and texts it from
+ *   TWILIO_PHONE_NUMBER with the Twilio Messaging API.
  * - `twilio-verify`: Twilio Verify generates, sends (SMS) and checks the code; nothing is stored here.
  * - `unavailable`: delivery is not configured. Sending a code fails with a clear 503; the rest of
  *   the API keeps working.
  */
 export type OtpProvider =
   | { kind: 'local'; label: string; deliver(phone: string, code: string): void }
+  | { kind: 'twilio-sms'; label: string; deliver(phone: string, code: string): Promise<OtpSendReceipt> }
   | {
       kind: 'twilio-verify';
       label: string;
@@ -45,6 +48,59 @@ export interface TwilioVerifyClient {
         };
       };
     };
+  };
+}
+
+/** The slice of the Twilio SDK used for plain SMS, so tests can pass a fake client. */
+export interface TwilioMessagingClient {
+  messages: {
+    create(options: { to: string; from: string; body: string }): Promise<{
+      sid: string;
+      status: string;
+      errorCode?: number | null;
+    }>;
+  } & ((sid: string) => { fetch(): Promise<{ status: string; errorCode?: number | null }> });
+}
+
+/** Message states that mean Twilio will not deliver the SMS. */
+const SMS_FAILED = new Set(['failed', 'undelivered', 'canceled']);
+const SMS_FINAL_CHECK_MS = 10_000;
+
+export function createTwilioSmsProvider(client: TwilioMessagingClient, from: string): OtpProvider {
+  return {
+    kind: 'twilio-sms',
+    label: `Twilio Messaging API (SMS from ${maskPhone(from)})`,
+    async deliver(phone, code) {
+      let message: { sid: string; status: string; errorCode?: number | null };
+      try {
+        message = await client.messages.create({
+          to: phone,
+          from,
+          body: `Your MiniLedger code is ${code}. It expires in ${OTP_TTL_MS / 60_000} minutes. Do not share it.`,
+        });
+      } catch (error) {
+        throw toAppError(error, 'sms', phone);
+      }
+      const { sid, status, errorCode } = message;
+      if (SMS_FAILED.has(status) || errorCode) {
+        console.warn(`[twilio] sms ${sid} to ${maskPhone(phone)}: rejected status=${status} code=${errorCode ?? 'none'}`);
+        throw toAppError({ status: 400, code: errorCode ?? undefined }, 'sms', phone);
+      }
+      // "queued"/"accepted" means Twilio took the request, not that the phone received it.
+      console.info(`[twilio] sms ${sid} to ${maskPhone(phone)}: accepted (status=${status})`);
+      // Log the delivery outcome a little later; purely diagnostic, never fails the request.
+      const timer = setTimeout(() => {
+        client
+          .messages(sid)
+          .fetch()
+          .then((m) =>
+            console.info(`[twilio] sms ${sid} to ${maskPhone(phone)}: status=${m.status} code=${m.errorCode ?? 'none'}`)
+          )
+          .catch((error: unknown) => console.warn(`[twilio] sms ${sid}: status check failed (code=${twilioCode(error) ?? 'none'})`));
+      }, SMS_FINAL_CHECK_MS);
+      timer.unref();
+      return { sid, status };
+    },
   };
 }
 
@@ -138,19 +194,19 @@ const VERIFY_SID = /^VA[0-9a-fA-F]{32}$/;
  * one-time codes (with a clear error to clients and a warning in the log).
  */
 export function resolveOtpProvider(): OtpProvider {
-  const { TWILIO_ACCOUNT_SID: sid, TWILIO_VERIFY_SERVICE_SID: serviceSid } = env;
+  const { TWILIO_ACCOUNT_SID: sid, TWILIO_VERIFY_SERVICE_SID: serviceSid, TWILIO_PHONE_NUMBER: from } = env;
   const credentials = twilioCredentials();
   const missing = [
     !sid && 'TWILIO_ACCOUNT_SID',
     sid && !credentials && 'TWILIO_AUTH_TOKEN (or TWILIO_API_KEY + TWILIO_API_SECRET)',
-    !serviceSid && 'TWILIO_VERIFY_SERVICE_SID',
+    !serviceSid && !from && 'TWILIO_VERIFY_SERVICE_SID or TWILIO_PHONE_NUMBER',
   ].filter(Boolean);
-  // Development defaults to console codes even when Twilio credentials are present, so local login
-  // never depends on SMS delivery (set OTP_PROVIDER=twilio to test real SMS). Production uses Twilio.
-  const choice = env.OTP_PROVIDER ?? (env.NODE_ENV === 'production' ? 'twilio' : 'console');
+  // Twilio is used whenever it is configured (credentials + a Verify service or sender number).
+  // Console codes are only a development fallback when it is not, or when OTP_PROVIDER=console.
+  const choice = env.OTP_PROVIDER ?? (missing.length === 0 || env.NODE_ENV === 'production' ? 'twilio' : 'console');
 
   if (choice === 'console') {
-    const why = env.OTP_PROVIDER === 'console' ? 'OTP_PROVIDER=console' : 'development default; set OTP_PROVIDER=twilio for SMS';
+    const why = env.OTP_PROVIDER === 'console' ? 'OTP_PROVIDER=console' : `Twilio not configured: missing ${missing.join(', ')}`;
     if (env.NODE_ENV === 'production') {
       return unavailableOtpProvider(`Twilio Verify is not configured (${why}); console codes are disabled in production`);
     }
@@ -161,14 +217,23 @@ export function resolveOtpProvider(): OtpProvider {
   if (!/^AC[0-9a-fA-F]{32}$/.test(sid!)) {
     return unavailableOtpProvider('TWILIO_ACCOUNT_SID is not an Account SID ("AC" + 32 hex characters)');
   }
-  if (!VERIFY_SID.test(serviceSid!)) {
+  const auth = `authenticated with ${credentials!.method}`;
+  // Verify when a service is configured; otherwise plain SMS from TWILIO_PHONE_NUMBER.
+  if (!serviceSid) {
+    if (!/^\+[1-9]\d{7,14}$/.test(from!)) {
+      return unavailableOtpProvider('TWILIO_PHONE_NUMBER must be an E.164 number, e.g. +15551234567');
+    }
+    const provider = createTwilioSmsProvider(createTwilioClient(credentials!), from!);
+    return { ...provider, label: `${provider.label}, ${auth}` };
+  }
+  if (!VERIFY_SID.test(serviceSid)) {
     return unavailableOtpProvider(
       'TWILIO_VERIFY_SERVICE_SID is not a Verify Service SID ("VA" + 32 hex characters; is it still a placeholder?). ' +
         'Create a service in Twilio Console > Verify > Services and copy its SID'
     );
   }
-  const provider = createTwilioVerifyProvider(createTwilioClient(credentials!), serviceSid!);
-  return { ...provider, label: `${provider.label}, authenticated with ${credentials!.method}` };
+  const provider = createTwilioVerifyProvider(createTwilioClient(credentials!), serviceSid);
+  return { ...provider, label: `${provider.label}, ${auth}` };
 }
 
 /** Twilio errors carry an HTTP `status` and a numeric Twilio `code`. Network errors carry neither. */
@@ -187,12 +252,16 @@ const PHONE_CANNOT_RECEIVE = "This number can't receive SMS codes. Check the num
  * Maps a Twilio failure to a safe client error. Logs Twilio's status, error code and docs link with
  * a masked number; never Twilio's message, which can contain the full phone number.
  */
-function toAppError(error: unknown, operation: 'send' | 'check', phone: string): AppError {
+function toAppError(error: unknown, operation: 'send' | 'check' | 'sms', phone: string): AppError {
   const status = twilioStatus(error);
   const code = twilioCode(error);
   const moreInfo = (error as { moreInfo?: unknown } | null)?.moreInfo;
+  const rawMessage = (error as { message?: unknown } | null)?.message;
+  // Twilio's text can contain phone numbers; mask every number-like sequence before logging it.
+  const twilioMessage = typeof rawMessage === 'string' ? rawMessage.replace(/\+?\d[\d\s-]{6,}\d/g, (n) => maskPhone(n)) : '';
   console.warn(
-    `[twilio] verify ${operation} to ${maskPhone(phone)} failed: status=${status ?? 'none'} code=${code ?? 'none'}` +
+    `[twilio] ${operation === 'sms' ? 'sms' : `verify ${operation}`} to ${maskPhone(phone)} failed: status=${status ?? 'none'} code=${code ?? 'none'}` +
+      (twilioMessage ? ` message="${twilioMessage}"` : '') +
       (typeof moreInfo === 'string' ? ` ${moreInfo}` : '')
   );
 
@@ -201,6 +270,9 @@ function toAppError(error: unknown, operation: 'send' | 'check', phone: string):
     case 21211: // invalid "To" number
     case 21614: // not a mobile number
       return new AppError(400, 'PHONE_INVALID', PHONE_CANNOT_RECEIVE);
+    case 21408: // Messaging geo permissions: SMS to this country is not enabled
+    case 21610: // recipient replied STOP
+    case 21612: // this From/To pair cannot be used
     case 60410: // number or prefix blocked by Fraud Guard
     case 60605: // SMS to this country is disabled in the Verify geo permissions
     case 60220: // channel disabled for this country
@@ -221,6 +293,19 @@ function toAppError(error: unknown, operation: 'send' | 'check', phone: string):
     return new AppError(429, 'SMS_PROVIDER_BUSY', 'The SMS service is busy. Please try again in a minute.', {
       retryAfterSeconds: 60,
     }, 60);
+  }
+  if (code === 572006 || code === 21219) {
+    // Trial accounts may only send Twilio's predefined templates (no custom OTP text) via Messaging.
+    console.error(
+      '[twilio] this is a TRIAL account: the Messages API cannot send custom text. Use Twilio Verify ' +
+        '(set TWILIO_VERIFY_SERVICE_SID) or upgrade the account in Console > Billing.'
+    );
+    return new AppError(503, 'SMS_PROVIDER_ERROR', 'Verification codes are temporarily unavailable. Please try again later.');
+  }
+  if (code === 21606 || code === 21659 || code === 21212 || code === 21660) {
+    // The From number is not an SMS-capable number of this account.
+    console.error('[twilio] TWILIO_PHONE_NUMBER cannot send SMS from this account (Console > Phone Numbers).');
+    return new AppError(503, 'SMS_PROVIDER_ERROR', 'Verification codes are temporarily unavailable. Please try again later.');
   }
   if (status === 401 || status === 403 || code === 20003 || (status === 404 && operation === 'send')) {
     console.error('[twilio] check TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN and TWILIO_VERIFY_SERVICE_SID.');

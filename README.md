@@ -141,11 +141,13 @@ never sees or stores them. Set these in `backend/.env` (server only, never in `m
 | `TWILIO_AUTH_TOKEN` | Twilio Console → Account info. Or instead: |
 | `TWILIO_API_KEY` + `TWILIO_API_SECRET` | Console → Account → API keys (`SK…`); used when both are set (recommended) |
 | `TWILIO_VERIFY_SERVICE_SID` | Console → Verify → Services → your service (starts with `VA`) |
-| `OTP_PROVIDER` | Optional. `console` or `twilio`. Empty: `console` in development, `twilio` in production |
+| `OTP_PROVIDER` | Optional. `console` or `twilio`. Empty: Twilio whenever it is configured; otherwise console (development only) |
 | `OTP_RESEND_COOLDOWN_SECONDS` | Seconds between two codes to one number (default 60) |
 | `OTP_MAX_SENDS_PER_HOUR` | Codes per number per hour (default 5) |
 
-`TWILIO_PHONE_NUMBER` is **not** needed: Verify sends from Twilio's own senders.
+Without a Verify service, set `TWILIO_PHONE_NUMBER` instead (an SMS-capable number **owned by the
+same account**): MiniLedger then generates the code, stores only its hash, and texts it with the
+Messaging API (`[twilio] sms SM… accepted`, then the final `status=delivered|undelivered`).
 
 On start the API logs which delivery it uses, e.g. `One-time codes: Twilio Verify (service …1a2b),
 authenticated with API key`. **If it says `console mode, NO SMS is sent`, no SMS will arrive**: the

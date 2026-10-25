@@ -28,7 +28,8 @@ console.log(`  OTP_PROVIDER              ${env.OTP_PROVIDER ?? '(empty: automati
 console.log(`  TWILIO_ACCOUNT_SID        ${describe(sid, 'AC')}`);
 console.log(`  TWILIO_AUTH_TOKEN         ${env.TWILIO_AUTH_TOKEN ? 'set' : 'not set'}`);
 console.log(`  TWILIO_API_KEY / SECRET   ${env.TWILIO_API_KEY ? describe(env.TWILIO_API_KEY, 'SK') : 'not set'} / ${env.TWILIO_API_SECRET ? 'set' : 'not set'}`);
-console.log(`  TWILIO_VERIFY_SERVICE_SID ${describe(serviceSid, 'VA')}`);
+console.log(`  TWILIO_VERIFY_SERVICE_SID ${serviceSid ? describe(serviceSid, 'VA') : 'not set (Verify not used)'}`);
+console.log(`  TWILIO_PHONE_NUMBER       ${env.TWILIO_PHONE_NUMBER ? maskPhone(env.TWILIO_PHONE_NUMBER) : 'not set'}`);
 console.log(`  -> the API will use: ${resolveOtpProvider().label}`);
 
 if (!credentials) {
@@ -79,6 +80,30 @@ try {
   console.log(`Verified Caller IDs: not available (${twilioFailure(error)})`);
 }
 
+const from = env.TWILIO_PHONE_NUMBER;
+if (from && !serviceSid) {
+  const numbers = await client.incomingPhoneNumbers.list({ phoneNumber: from, limit: 1 }).catch(() => []);
+  const number = numbers[0];
+  if (!number) {
+    problems++;
+    console.log(`\nTWILIO_PHONE_NUMBER ${maskPhone(from)} is not a number of this account: Twilio rejects it as sender (21606).`);
+  } else {
+    console.log(`\nSender ${maskPhone(from)}: SMS-capable=${number.capabilities.sms}`);
+    if (!number.capabilities.sms) problems++;
+  }
+  const lookup = argValue('--phone');
+  if (lookup) {
+    const to = phoneSchema.parse(lookup);
+    const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const messages = await client.messages.list({ to, dateSentAfter: since, limit: 20 }).catch(() => []);
+    console.log(`Messages to ${maskPhone(to)} in the last 24 h (${messages.length}):`);
+    for (const m of messages) {
+      console.log(`  ${m.dateCreated.toISOString()}  ${m.sid}  status=${m.status}${m.errorCode ? ` error=${m.errorCode}` : ''}`);
+    }
+    if (messages.length === 0) console.log('  none: the API never asked Twilio to text this number in that period.');
+  }
+}
+
 const services = await client.verify.v2.services.list({ limit: 20 }).catch((error: unknown) => {
   problems++;
   console.error(`Verify services: listing FAILED (${twilioFailure(error)})`);
@@ -89,7 +114,9 @@ for (const s of services) {
   const used = s.sid === serviceSid ? '  <- TWILIO_VERIFY_SERVICE_SID' : '';
   console.log(`  ${s.sid}  "${s.friendlyName}"  codeLength=${s.codeLength}${used}`);
 }
-if (!serviceSid) {
+if (!serviceSid && from) {
+  console.log('\nNo TWILIO_VERIFY_SERVICE_SID: codes are sent as plain SMS from TWILIO_PHONE_NUMBER.');
+} else if (!serviceSid) {
   problems++;
   console.log(
     services.length > 0

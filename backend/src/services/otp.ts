@@ -36,7 +36,8 @@ export async function issueOtp(provider: OtpProvider, target: OtpTarget) {
 
   const { phone, purpose, userId } = target;
   const now = new Date();
-  const localCode = provider.kind === 'local' ? generateOtp() : null;
+  // Generated here unless Twilio Verify generates it; only its HMAC is stored.
+  const localCode = provider.kind === 'twilio-verify' ? null : generateOtp();
 
   const row = await prisma.$transaction(async (tx) => {
     // Serialize sends for this phone so two concurrent requests cannot both pass the limits.
@@ -97,7 +98,8 @@ export async function issueOtp(provider: OtpProvider, target: OtpTarget) {
     provider.deliver(phone, localCode!);
   } else {
     try {
-      const receipt = await provider.send(phone);
+      const receipt =
+        provider.kind === 'twilio-sms' ? await provider.deliver(phone, localCode!) : await provider.send(phone);
       await prisma.otpCode.update({ where: { id: row.id }, data: { providerSid: receipt.sid } });
     } catch (error) {
       // Nothing was sent, so this attempt must not start a cooldown or count toward the hourly cap.
